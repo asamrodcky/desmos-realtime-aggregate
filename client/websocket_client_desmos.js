@@ -1,3 +1,6 @@
+var my_uuid = ""
+var initialized = false
+
 function getColor(id) {
   color = Desmos.Colors.BLACK;
   if (id == 1) {
@@ -28,12 +31,20 @@ function create_web_socket_connection() {
      for (var i = 0; i < 10; i++) {
        Calc.removeExpression({id: `P_{${i}}`});
      }
+     // Update Button State to indicate connected
      document.getElementById("status-icon").className = "bi bi-record-fill"
      document.getElementById("status-icon").style.color = "red"
      var buttonStart = document.getElementById("connect-web-socket-button")
      buttonStart.style.display = "none"
      var buttonStop = document.getElementById("stop-websocket")
      buttonStop.style.display = "inline"
+
+     // Ask the client for a unique uuid key
+     ws.send(JSON.stringify({
+       "message-type": "init",
+       "data": {}
+     }))
+
      buttonStop.onclick = function() {
        if (ws.readyState === WebSocket.OPEN) {
          console.log("Closing..")
@@ -48,34 +59,59 @@ function create_web_socket_connection() {
     // Convert string to Array of Objects
     received_msg = received_msg.replaceAll("'", "\"");
     var parsed = JSON.parse(received_msg);
-    keys = Object.keys(parsed)
-    s_list_latex = `S=\\left[`
-    // Update the position of each individual point
-    for (var i = 0; i < keys.length; i++) {
-      color = getColor(keys[i]);
+    console.log("received:", parsed)
+
+    if (parsed["message-type"] == "init-res") {
+      my_uuid = parsed["data"]["uuid"]
+      console.log("my uuid: ", my_uuid)
+      var initialized = true
+
+      // Create a draggable point for myself
       Calc.setExpression({
-        "id": `P_{${keys[i]}}`,
-        "latex": `P_{${keys[i]}}=(${parsed[keys[i]].x}, ${parsed[keys[i]].y})`,
-        "dragMode": Desmos.DragModes.NONE,
-        "color": color,
-        "folderId": "student_points",
+        "id": 'my-point',
+        "latex": 'P_{Me}=(0,0)',
+        "dragMode": Desmos.DragModes.XY,
       })
-      if (i == 0) {
-        s_list_latex = s_list_latex + `P_{${keys[i]}}`
-      }
-      else {
-        s_list_latex = s_list_latex + `,P_{${keys[i]}}`
+
+      var list_helper = Calc.HelperExpression({
+        "latex": "\\left[P_{Me}.x,P_{Me}.y\\right]"
+      })
+      // When there is a change in the value, send the updates to the server
+      list_helper.observe('listValue', function() {
+        var my_point_pose_x = list_helper.listValue[0]
+        var my_point_pose_y = list_helper.listValue[1]
+
+        var response = {
+          "message-type": "point-update",
+          "uuid": my_uuid,
+          "data": {
+            "x": my_point_pose_x,
+            "y": my_point_pose_y
+          }
+        }
+        ws.send(JSON.stringify(response))
+      })
+    }
+    if (parsed["message-type"] == "point-update") {
+      // Remove the connected user with my uuid
+      var connected_users_map = new Map(
+          Object.entries(parsed["data"]["connected-users"])
+      )
+      connected_users_map.delete(my_uuid)
+
+      for (let [key,value] of connected_users_map) {
+        console.log(value)
+        var x_val = value["x"]
+        var y_val = value["y"]
+        var id = value["id"]
+        Calc.setExpression( {
+          "id": key,
+          "latex": `P_{${id}}=(${x_val}, ${y_val})`,
+          "dragMode": Desmos.DragModes.NONE,
+          "color": Desmos.Colors.BLACK,
+        })
       }
     }
-    s_list_latex = s_list_latex + `\\right]`
-    // Update the list of student points -- handles if a kid disappears or comes back
-    Calc.setExpression({
-      "type": "expression",
-      "id": "s_list",
-      "latex": s_list_latex,
-      "hidden": true,
-      "folderId": "student_points",
-    })
   };
 
   ws.onclose = function() {
